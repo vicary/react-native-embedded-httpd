@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "workspaces": [
+    "workspaces/*"
+  ],
+  "scripts": {
+    "prepare": "husky && yarn workspace react-native-embedded-httpd run build",
+    "test": "yarn workspaces run test"
+  },
+  "devDependencies": {
+    "husky": "^9.1.5",
+    "typescript": "^5.8.2"
+  },
+  "packageManager": "yarn@1.22.22"
+}

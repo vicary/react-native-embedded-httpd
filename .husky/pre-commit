@@ -1,0 +1,3 @@
+yarn test
+
+yarn npx -y sort-package-json --quiet workspaces/*/package.json && git add workspaces/*/package.json
