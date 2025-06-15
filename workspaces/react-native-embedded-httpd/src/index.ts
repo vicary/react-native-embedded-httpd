@@ -118,6 +118,9 @@ class EmbeddedServer implements AsyncDisposable {
   }
 }
 
+// Only export the type to prevent users from creating it themselves.
+export type { EmbeddedServer };
+
 const servers = new Map<
   number,
   {
