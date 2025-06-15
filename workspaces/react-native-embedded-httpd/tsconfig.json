@@ -2,7 +2,7 @@
   "compilerOptions": {
     "baseUrl": "./",
     "paths": {
-      "react-native-epson-escposprinter": ["./src/index"]
+      "react-native-embedded-httpd": ["./src/index"]
     },
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,

@@ -3,7 +3,7 @@ package com.embeddedhttpd
 import android.graphics.BitmapFactory
 import android.util.Base64
 import android.widget.Toast
-import androidx.lifecycle.ViewTreeLifecycleOwner
+import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -13,21 +13,19 @@ import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
 import io.ktor.http.*
-import io.ktor.server.testing.*
+import io.ktor.http.content.*
+import io.ktor.server.application.*
+import io.ktor.server.engine.*
+import io.ktor.server.netty.*
+import io.ktor.server.request.*
+import io.ktor.server.response.*
+import io.ktor.server.routing.*
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.ConcurrentHashMap
 import java.util.UUID
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.*
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -37,60 +35,50 @@ class EmbeddedHttpdModule internal constructor(val context: ReactApplicationCont
   companion object {
     const val NAME = "EmbeddedHttpd"
 
-    private fun ipToNumber(ip: String): Long =
-      ip.split(".").fold(0L) { acc, s -> (acc shl 8) + s.toLong() }
+    private fun mapForEach(
+      map: ReadableMap,
+      action: (String, String) -> Unit
+    ) {
+      val it = map.keySetIterator()
+      while (it.hasNextKey()) {
+        val key = it.nextKey()
+        val value = map.getString(key)?.trim()
+        if (value.isNullOrEmpty()) continue
 
-    private fun jsonToObject(json: String): WritableMap {
-      lateinit var objToMap: (JSONObject) -> WritableMap
-      lateinit var arrToMap: (JSONArray) -> WritableArray
-
-      objToMap = { obj ->
-        Arguments.createMap().apply {
-          obj.keys().forEach {
-            when (val value = obj.get(it)) {
-              is Boolean -> putBoolean(it, value)
-              is Int -> putInt(it, value)
-              is Double -> putDouble(it, value)
-              is String -> putString(it, value)
-              is JSONObject -> putMap(it, objToMap(value))
-              is JSONArray -> putArray(it, arrToMap(value))
-              else -> {}
-            }
-          }
-        }
+        action(key, value)
       }
-
-      arrToMap = { arr ->
-        Arguments.createArray().apply {
-          for (i in 0 until arr.length()) {
-            when (val it = arr.get(i)) {
-              is Boolean -> pushBoolean(it)
-              is Int -> pushInt(it)
-              is Double -> pushDouble(it)
-              is String -> pushString(it)
-              is JSONObject -> pushMap(objToMap(it))
-              is JSONArray -> pushArray(arrToMap(it))
-              else -> pushNull()
-            }
-          }
-        }
-      }
-
-      return JSONObject(json).let { objToMap(it) }
     }
   }
 
-  private val instances = ConcurrentHashMap<Int, EmbeddedServer>()
+  private val instances = ConcurrentHashMap<
+    Int,
+    EmbeddedServer<
+      NettyApplicationEngine,
+      NettyApplicationEngine.Configuration
+    >
+  >()
+
   private val instancesId = AtomicInteger(0)
 
-  private val requests = ConcurrentHashMap<String, CompletableDeferred<?>>();
+  protected fun getInstance(instanceId: Double): EmbeddedServer<
+    NettyApplicationEngine,
+    NettyApplicationEngine.Configuration
+  > {
+    return instances[instanceId.toInt()]
+      ?: throw IllegalArgumentException("Instance $instanceId not found")
+  }
+
+  private val requests = ConcurrentHashMap<
+    String,
+    CompletableDeferred<WritableMap>
+  >();
 
   override fun getName(): String = NAME
 
   protected val coroutineScope: CoroutineScope
     get() = getCurrentActivity()
       ?.getCurrentFocus()
-      ?.let { ViewTreeLifecycleOwner.get(it) }
+      ?.findViewTreeLifecycleOwner()
       ?.lifecycleScope
       // [ ] Test concurrency, fallback to GlobalScope on racing conditions
       ?: CoroutineScope(Dispatchers.Default)
@@ -127,72 +115,25 @@ class EmbeddedHttpdModule internal constructor(val context: ReactApplicationCont
       val instanceId = instancesId.incrementAndGet()
 
       runCatching {
-        val server = embeddedServer(
+        embeddedServer(
           Netty,
-          port = port.takeIf { it > 0 }?.toInt() ?: 80,
+          port = port.takeIf { it > 0 }?.toInt() ?: 8080,
           host = host.trim().ifEmpty { "0.0.0.0" },
           // [ ] HTTPS requires specifying connector impl, which needs `KeyStore`
           // https://api.ktor.io/ktor-server/ktor-server-core/io.ktor.server.engine/ssl-connector.html
         ) {
           routing {
-            get("/*") {
-              val requestId = UUID.randomUUID().toString()
-              val deferred = CompletableDeferred<ReadableMap>()
-
-              // To be referenced by the `respond()` method
-              requests.set(requestId, deferred)
-
-              // Notify JavaScript side about the request
-              emitEvent("request", Arguments.createMap().apply {
-                putInt("instanceId", instanceId)
-                putString("requestId", requestId)
-                putMap("request", Arguments.createMap().apply {
-                  putString("method", call.request.httpMethod.value)
-                  putString("url", call.request.uri)
-                  putMap("headers", Arguments.createMap().apply {
-                    call.request.headers.forEach { (key, values) ->
-                      putString(key, values[0])
-                    }
-                  })
-                  putString("body", call.request.receiveText())
-                })
-              })
-
-              runCatching {
-                val response = withTimeout(60000) { deferred.await() }
-                val headers = response
-                  .takeIf { it.hasKey("headers") }
-                  ?.getMap("headers")
-                val contentType = headers
-                  ?.getString("Content-Type")
-                  ?: "text/plain"
-                val statusCode = response
-                  .takeIf { it.hasKey("statusCode") }
-                  ?.getInt("statusCode")
-                  ?: 200
-
-                call.respondText(
-                  response.getString("body"),
-                  ContentType.parse(contentType),
-                  HttpStatusCode.fromValue(statusCode)
-                ) {
-                  headers?.keys.forEach { key ->
-                    headers
-                      .getString(key)
-                      .takeIf { it.isNotEmpty() }
-                      ?.let { header(key, it) }
-                  }
-                }
-              }
-              .onFailure {
-                promise.reject(
-                  it::class.java.simpleName,
-                  it.message
-                )
-              }
-
-              // Finally remove the request reference
-              requests.remove(requestId)
+            get("/") {
+              request(instanceId, call, promise)
+            }
+            get("/{...}") {
+              request(instanceId, call, promise)
+            }
+            post("/") {
+              request(instanceId, call, promise)
+            }
+            post("/{...}") {
+              request(instanceId, call, promise)
             }
           }
         }
@@ -236,7 +177,7 @@ class EmbeddedHttpdModule internal constructor(val context: ReactApplicationCont
   ) {
     coroutineScope.launch {
       runCatching {
-        instances.get(instanceId.toInt())?.startSuspend(wait = true)
+        getInstance(instanceId).start()
         promise.resolve(null)
       }
       .onFailure {
@@ -260,7 +201,7 @@ class EmbeddedHttpdModule internal constructor(val context: ReactApplicationCont
 
     coroutineScope.launch {
       runCatching {
-        instances.get(instanceId.toInt())?.stopSuspend(
+        getInstance(instanceId).stopSuspend(
           gracePeriodMillis = argGracePeriod,
           timeoutMillis = argTimeout
         )
@@ -282,7 +223,7 @@ class EmbeddedHttpdModule internal constructor(val context: ReactApplicationCont
   ) {
     coroutineScope.launch {
       runCatching {
-        instances.get(instanceId.toInt())?.reload()
+        getInstance(instanceId).reload()
         promise.resolve(null)
       }
       .onFailure {
@@ -292,6 +233,77 @@ class EmbeddedHttpdModule internal constructor(val context: ReactApplicationCont
         )
       }
     }
+  }
+
+  protected suspend fun request(
+    instanceId: Int,
+    call: RoutingCall,
+    promise: Promise
+  ) {
+    val requestId = UUID.randomUUID().toString()
+    val deferred = CompletableDeferred<WritableMap>()
+
+    // To be referenced by the `respond()` method
+    requests.set(requestId, deferred)
+
+    // Notify JavaScript side about the request
+    emitEvent("httpdRequest", Arguments.createMap().apply {
+      putInt("instanceId", instanceId)
+      putString("requestId", requestId)
+      putMap("request", Arguments.createMap().apply {
+        putString("method", call.request.local.method.value)
+        putString("url", call.request.local.uri)
+        putMap("headers", Arguments.createMap().apply {
+          call.request.headers.forEach { key, values ->
+            putString(key, values[0].toString())
+          }
+        })
+        putString("body", call.receiveText())
+      })
+    })
+
+    runCatching {
+      val response = withTimeout(60000) { deferred.await() }
+      val headers = response
+        .takeIf { it.hasKey("headers") }
+        ?.getMap("headers")
+      val contentType = headers
+        ?.getString("Content-Type")
+        ?.let { ContentType.parse(it)}
+        ?: ContentType.Text.Plain
+      val statusCode = response
+        .takeIf { it.hasKey("statusCode") }
+        ?.getInt("statusCode")
+        ?.let { HttpStatusCode.fromValue(it) }
+        ?: HttpStatusCode.OK
+
+      if (headers != null) {
+        mapForEach(headers) { key, value ->
+          call.response.headers.append(key, value)
+        }
+      }
+
+      call.respondText(
+        response.getString("body") ?: "",
+        contentType,
+        statusCode
+      )
+    }
+    .onFailure {
+      call.respondText(
+        "[${it::class.java.simpleName}] ${it.message}",
+        ContentType.Text.Plain,
+        HttpStatusCode.InternalServerError
+      )
+
+      promise.reject(
+        it::class.java.simpleName,
+        it.message
+      )
+    }
+
+    // Finally remove the request reference
+    requests.remove(requestId)
   }
 
   @ReactMethod
@@ -309,17 +321,16 @@ class EmbeddedHttpdModule internal constructor(val context: ReactApplicationCont
         val responseMap = Arguments.createMap().apply {
           putInt("statusCode", status.toInt())
           putString("body", body)
-          if (headers.hasKey("Content-Type")) {
-            putString("Content-Type", headers.getString("Content-Type"))
+
+          val responseHeaders = Arguments.createMap()
+          mapForEach(headers) { key, value ->
+            responseHeaders.putString(key, value)
           }
-          if (headers.hasKey("Content-Length")) {
-            putInt("Content-Length", headers.getInt("Content-Length"))
-          }
-          headers.keySet().forEach { key ->
-            putString(key, headers.getString(key))
-          }
+          putMap("headers", responseHeaders)
         }
+
         deferred.complete(responseMap)
+
         promise.resolve(null)
       }
       .onFailure {

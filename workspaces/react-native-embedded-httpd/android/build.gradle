@@ -36,11 +36,11 @@ def getExtOrIntegerDefault(name) {
 android {
   namespace = "com.embeddedhttpd"
 
-  compileSdkVersion getExtOrIntegerDefault("compileSdkVersion")
+  compileSdkVersion = getExtOrIntegerDefault("compileSdkVersion")
 
   defaultConfig {
-    minSdkVersion getExtOrIntegerDefault("minSdkVersion")
-    targetSdkVersion getExtOrIntegerDefault("targetSdkVersion")
+    minSdkVersion = getExtOrIntegerDefault("minSdkVersion")
+    targetSdkVersion = getExtOrIntegerDefault("targetSdkVersion")
     buildConfigField "boolean", "IS_NEW_ARCHITECTURE_ENABLED", isNewArchitectureEnabled().toString()
   }
   buildTypes {
@@ -90,8 +90,8 @@ dependencies {
   implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
 
   // Coroutines
-  implementation "androidx.activity:activity-ktx:1.6.1"
-  implementation "androidx.lifecycle:lifecycle-runtime-ktx:2.5.1"
+  implementation "androidx.activity:activity:1.10.1"
+  implementation "androidx.lifecycle:lifecycle-runtime:2.9.1"
   implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:$coroutines_version"
   implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$coroutines_version"
 

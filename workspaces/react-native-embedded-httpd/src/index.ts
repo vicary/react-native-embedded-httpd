@@ -24,7 +24,7 @@ export type ServeOptions<Env = never, Context = never> = {
   fetch: FetchCallback<Env, Context>;
 
   /**
-   * @default 80
+   * @default 8080
    */
   port?: number;
 
@@ -118,6 +118,9 @@ class EmbeddedServer implements AsyncDisposable {
   }
 }
 
+// Only export the type to prevent users from creating it themselves.
+export type { EmbeddedServer };
+
 const servers = new Map<
   number,
   {
@@ -182,12 +185,16 @@ async function toNativeResponse(
     responseObject.headers[key] = value;
   }
 
-  if (response.body) {
-    responseObject.body = await streamToString(response.body);
-  }
+  responseObject.body = await response.text();
+
+  // if (response.body) {
+  //   responseObject.body = await streamToString(response.body);
+  // }
 
   return responseObject;
 
+  /**
+   * Converts the contents of a ReadableStream to a string.
   async function* genChunks<R>(stream: ReadableStream<R>) {
     const reader = stream.getReader();
 
@@ -201,9 +208,6 @@ async function toNativeResponse(
     }
   }
 
-  /**
-   * Converts the contents of a ReadableStream to a string.
-   */
   async function streamToString(
     stream: ReadableStream<Uint8Array>,
     encoding?: string,
@@ -217,6 +221,7 @@ async function toNativeResponse(
 
     return result;
   }
+   */
 
   /**
    * Converts the contents of a ReadableStream to a Base64-encoded string.
@@ -244,7 +249,7 @@ async function toNativeResponse(
    */
 }
 
-events.addListener("httpRequest", async (event: NativeRequestEvent) => {
+events.addListener("httpdRequest", async (event: NativeRequestEvent) => {
   const server = servers.get(event.instanceId);
   if (!server) {
     console.warn(
@@ -272,7 +277,7 @@ events.addListener("httpRequest", async (event: NativeRequestEvent) => {
 
 export async function serve<Env = never, Context = never>({
   fetch,
-  port = 80,
+  port = 8080,
   hostname = "0.0.0.0",
   ssl,
 }: ServeOptions<Env, Context>): Promise<EmbeddedServer> {
