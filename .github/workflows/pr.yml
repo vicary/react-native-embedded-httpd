@@ -13,9 +13,9 @@ jobs:
   lint:
     uses: ./.github/workflows/lint.yml
     with:
-      working-directory: workspaces/react-native-epson-escposprinter
+      working-directory: workspaces/react-native-embedded-httpd
 
   test:
     uses: ./.github/workflows/test.yml
     with:
-      working-directory: workspaces/react-native-epson-escposprinter
+      working-directory: workspaces/react-native-embedded-httpd
