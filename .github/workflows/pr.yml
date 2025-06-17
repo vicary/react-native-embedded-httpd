@@ -9,6 +9,9 @@ on:
       - next
       - "*.x"
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     uses: ./.github/workflows/lint.yml
