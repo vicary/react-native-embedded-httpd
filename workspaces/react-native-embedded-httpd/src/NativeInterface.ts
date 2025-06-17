@@ -10,8 +10,8 @@ import type { Spec } from "./NativeEmbeddedHttpd";
 const isTurboModuleEnabled = global.__turboModuleProxy != null;
 
 const NativeInterface: Spec = isTurboModuleEnabled
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  ? require("./NativeEmbeddedHttpd").default
+  ? // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("./NativeEmbeddedHttpd").default
   : NativeModules.EmbeddedHttpd;
 
 if (!NativeInterface) {
