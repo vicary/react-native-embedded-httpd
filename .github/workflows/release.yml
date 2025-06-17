@@ -11,7 +11,7 @@ on:
 
 defaults:
   run:
-    working-directory: packages/react-native-embedded-httpd
+    working-directory: workspaces/react-native-embedded-httpd
 
 jobs:
   lint:
